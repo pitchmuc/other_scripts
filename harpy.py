@@ -1,18 +1,32 @@
 # -*- coding: utf-8 -*-
 """
-Created on Sun Nov 25 13:28:28 2018
+Created on Sun Nov 25 15:00:00 2018
 
 @author: piccini
 """
 import json as _json
 import datetime as _datetime
-_version ='1.0.0'
+from collections import defaultdict
+import pandas as _pd
+
 class reader:
     data = {}
     entries = []
     _entryKeys = {'startedDateTime':0,'time':0,'request':0,'response':0,'cache':0,'timings':0,'serverIPAddress':0,'connection':0}
     def __init__(self,data):
-        j_data = _json.loads(data)
+        """
+        Takes a har file data and loads its data in memory for futher calculation.
+        data : either 
+            - file name of the har 
+            - text string retrieved in a variable (ie : open(myfile.har).read())
+            - dictionary from the JSON of the HAR file
+        """
+        if type(data) == dict:
+            j_data = data
+        elif '.json' in data or '.txt' in data or '.har' in data:
+            j_data = _json.loads(open(data,'r',encoding='utf8').read())
+        elif type(data) == str :
+            j_data = _json.loads(data)
         log_data = j_data['log']
         self.data = log_data
         self.entries = self.data['entries']
@@ -39,12 +53,24 @@ class reader:
         sum_data['total_bodySize'] = sum((self.entries[x]['request']['bodySize'] for x in range(len(self.entries)) if self.entries[x]['request']['bodySize'] != -1))
         sum_data['missing_bodySize'] = abs(sum((self.entries[x]['request']['bodySize'] for x in range(len(self.entries)) if self.entries[x]['request']['bodySize'] == -1)))
         sum_data['total_size'] = sum_data['total_headersSize'] + sum_data['total_bodySize']
-        sum_data['average_headersSize'] = sum_data['total_headersSize'] / (len(self.entries)-sum_data['missing_headersSize'])
-        sum_data['average_bodySize'] = sum_data['total_bodySize'] / (len(self.entries)-sum_data['missing_bodySize'])
-        sum_data['average_totalSize'] = sum_data['total_size'] / (len(self.entries) - (sum_data['missing_bodySize'] + sum_data['missing_headersSize']))
+        try:
+            sum_data['average_headersSize'] = sum_data['total_headersSize'] / (len(self.entries)-sum_data['missing_headersSize'])
+        except:
+            sum_data['average_headersSize'] = 0
+        try:
+            sum_data['average_bodySize'] = sum_data['total_bodySize'] / (len(self.entries)-sum_data['missing_bodySize'])
+        except:
+            sum_data['average_bodySize'] = 0
+        try:
+            sum_data['average_totalSize'] = sum_data['total_size'] / (len(self.entries) - (sum_data['missing_bodySize'] + sum_data['missing_headersSize']))
+        except:
+            sum_data['average_totalSize'] = 0
         sum_data['total_responseSize'] = sum((self.entries[x]['response']['_transferSize'] for x in range(len(self.entries)) if self.entries[x]['response']['_transferSize'] != -1))
         sum_data['missing_responseSize'] = abs(sum((self.entries[x]['response']['_transferSize'] for x in range(len(self.entries)) if self.entries[x]['response']['_transferSize'] == -1)))
-        sum_data['average_responseSize'] = sum_data['total_responseSize'] / (len(self.entries)-sum_data['missing_responseSize'])
+        try:
+            sum_data['average_responseSize'] = sum_data['total_responseSize'] / (len(self.entries)-sum_data['missing_responseSize'])
+        except:
+            sum_data['average_responseSize'] = 0
         list_cookies_name = []
         for entry in self.entries: ##retrieving all cookie name
             try:
@@ -84,13 +110,40 @@ class reader:
         return sum_data
         
         
-    def requestSizeAnalyzis(self):
+    def sizeAnalysis(self):
         """
-        This methods returns information for each request per page and their size.
-        Information formated as dict
+        This methods returns size (header + body) for each request and the tranfer size of the response.
+        return a dataframe.
         """
-        request_data = {'url':[],'size':[]}
+        request_data = {'url':[],'request_size':[],'response_size':[]}
         for entry in self.entries:
             request_data['url'].append(entry['request']['url'])
-            request_data['size'].append(entry['request']['headersSize']+entry['request']['bodySize'])    
-        return request_data   
+            request_data['request_size'].append(entry['request']['headersSize']+entry['request']['bodySize'])
+            request_data['response_size'].append(entry['response']['_transferSize'])
+        df = _pd.DataFrame(request_data)
+        return df
+    
+    def requestEntriesAnalysis(self):
+        """
+        Return a dataframe with detail information of your entries for your HAR file. 
+        """
+        entries = self.entries
+        dict_data = defaultdict(list)
+        columns = ['bodySize','timestamp','duration','blocked','dns','ssl','connect','send','wait','receive',
+                   'blocked_queueing','ressourceType','http_response','transferSize']
+        counter = 0 
+        for entry in entries:
+            entryName = f'{entry["request"]["url"]}_{counter}'
+            dict_data[entryName].append(entry['request']['bodySize'])
+            timestamp = _datetime.datetime.strptime(entry['startedDateTime'],"%Y-%m-%dT%H:%M:%S.%fZ")
+            dict_data[entryName].append(timestamp.timestamp())
+            dict_data[entryName].append(entry['time'])
+            for el in entry['timings']:
+                dict_data[entryName].append(entry['timings'][el])
+            dict_data[entryName].append(entry['_resourceType'])
+            dict_data[entryName].append(entry['response']['status'])
+            dict_data[entryName].append(entry['response']['_transferSize'])
+            counter += 1
+        df = _pd.DataFrame(dict_data).T
+        df.columns = columns
+        return df
